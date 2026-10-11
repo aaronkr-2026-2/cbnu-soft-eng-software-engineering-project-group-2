@@ -1,13 +1,10 @@
-
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import clientPromise from "@/lib/mongodb";
 
 async function getCollection() {
   const client = await clientPromise;
-  const db = client.db(
-    process.env.MONGODB_DB || "vocab_flashcards"
-  );
+  const db = client.db(process.env.MONGODB_DB || "vocab_flashcards");
 
   return db.collection("words");
 }
@@ -20,9 +17,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const dueOnly = searchParams.get("due") === "true";
 
-    const filter = dueOnly
-      ? { nextReviewAt: { $lte: new Date() } }
-      : {};
+    const filter = dueOnly ? { nextReviewAt: { $lte: new Date() } } : {};
 
     const words = await collection
       .find(filter)
@@ -48,16 +43,12 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
 
-    const word =
-      typeof body.word === "string" ? body.word.trim() : "";
-    const meaning =
-      typeof body.meaning === "string"
-        ? body.meaning.trim()
-        : "";
-    const example =
-      typeof body.example === "string"
-        ? body.example.trim()
-        : "";
+    const word = typeof body.word === "string" ? body.word.trim() : "";
+    const meaning = typeof body.meaning === "string" ? body.meaning.trim() : "";
+    const example = typeof body.example === "string" ? body.example.trim() : "";
+    // NEW: example-ийн монгол орчуулга
+    const translation =
+      typeof body.translation === "string" ? body.translation.trim() : "";
 
     if (!word || !meaning) {
       return NextResponse.json(
@@ -69,7 +60,8 @@ export async function POST(request: Request) {
     if (
       word.length > 100 ||
       meaning.length > 500 ||
-      example.length > 1000
+      example.length > 1000 ||
+      translation.length > 1000
     ) {
       return NextResponse.json(
         { error: "One or more fields are too long." },
@@ -84,6 +76,7 @@ export async function POST(request: Request) {
       word,
       meaning,
       example,
+      translation, // NEW
       createdAt: now,
       nextReviewAt: now,
       lastReviewedAt: null,
@@ -96,6 +89,7 @@ export async function POST(request: Request) {
         word,
         meaning,
         example,
+        translation, // NEW
         createdAt: now,
         nextReviewAt: now,
         lastReviewedAt: null,

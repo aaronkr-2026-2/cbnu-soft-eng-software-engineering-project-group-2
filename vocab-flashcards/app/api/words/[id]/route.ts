@@ -1,53 +1,36 @@
-
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import clientPromise from "@/lib/mongodb";
 import { getNextReviewDate } from "@/lib/review";
 
-
 async function getCollection() {
   const client = await clientPromise;
-  return client.db(
-    process.env.MONGODB_DB || "vocab_flashcards"
-  ).collection("words");
+  return client
+    .db(process.env.MONGODB_DB || "vocab_flashcards")
+    .collection("words");
 }
 
 type Context = {
   params: Promise<{ id: string }>;
 };
 
-export async function PATCH(
-  request: Request,
-  context: Context
-) {
+export async function PATCH(request: Request, context: Context) {
   try {
     const { id } = await context.params;
 
     if (!ObjectId.isValid(id)) {
-      return NextResponse.json(
-        { error: "Invalid word ID." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid word ID." }, { status: 400 });
     }
 
     const body = await request.json();
     const collection = await getCollection();
     const _id = new ObjectId(id);
 
-
-
-
     // Review action: "know" or "again"
     if (body.review === "know" || body.review === "again") {
       const now = new Date();
+      // FIX: огнооны тооцоог зөвхөн getNextReviewDate хийнэ
       const nextReviewAt = getNextReviewDate(body.review, now);
-
-      // Simple MVP schedule:
-      // "know" -> review again in 3 days
-      // "again" -> review tomorrow
-      nextReviewAt.setDate(
-        now.getDate() + (body.review === "know" ? 3 : 1)
-      );
 
       const result = await collection.updateOne(
         { _id },
@@ -61,31 +44,19 @@ export async function PATCH(
       );
 
       if (!result.matchedCount) {
-        return NextResponse.json(
-          { error: "Word not found." },
-          { status: 404 }
-        );
+        return NextResponse.json({ error: "Word not found." }, { status: 404 });
       }
 
-      return NextResponse.json({
-        success: true,
-        nextReviewAt,
-      });
+      return NextResponse.json({ success: true, nextReviewAt });
     }
 
-
-    
     // Edit vocabulary
-    const word =
-      typeof body.word === "string" ? body.word.trim() : "";
-    const meaning =
-      typeof body.meaning === "string"
-        ? body.meaning.trim()
-        : "";
-    const example =
-      typeof body.example === "string"
-        ? body.example.trim()
-        : "";
+    const word = typeof body.word === "string" ? body.word.trim() : "";
+    const meaning = typeof body.meaning === "string" ? body.meaning.trim() : "";
+    const example = typeof body.example === "string" ? body.example.trim() : "";
+    // NEW: example-ийн монгол орчуулга
+    const translation =
+      typeof body.translation === "string" ? body.translation.trim() : "";
 
     if (!word || !meaning) {
       return NextResponse.json(
@@ -97,7 +68,8 @@ export async function PATCH(
     if (
       word.length > 100 ||
       meaning.length > 500 ||
-      example.length > 1000
+      example.length > 1000 ||
+      translation.length > 1000
     ) {
       return NextResponse.json(
         { error: "One or more fields are too long." },
@@ -107,14 +79,11 @@ export async function PATCH(
 
     const result = await collection.updateOne(
       { _id },
-      { $set: { word, meaning, example } }
+      { $set: { word, meaning, example, translation } }
     );
 
     if (!result.matchedCount) {
-      return NextResponse.json(
-        { error: "Word not found." },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Word not found." }, { status: 404 });
     }
 
     return NextResponse.json({ success: true });
@@ -126,30 +95,19 @@ export async function PATCH(
   }
 }
 
-export async function DELETE(
-  _request: Request,
-  context: Context
-) {
+export async function DELETE(_request: Request, context: Context) {
   try {
     const { id } = await context.params;
 
     if (!ObjectId.isValid(id)) {
-      return NextResponse.json(
-        { error: "Invalid word ID." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid word ID." }, { status: 400 });
     }
 
     const collection = await getCollection();
-    const result = await collection.deleteOne({
-      _id: new ObjectId(id),
-    });
+    const result = await collection.deleteOne({ _id: new ObjectId(id) });
 
     if (!result.deletedCount) {
-      return NextResponse.json(
-        { error: "Word not found." },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Word not found." }, { status: 404 });
     }
 
     return NextResponse.json({ success: true });

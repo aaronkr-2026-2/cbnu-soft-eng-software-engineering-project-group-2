@@ -198,3 +198,50 @@ The current unit tests verify that:
 - Words marked as "again" are scheduled for review one day later.
 
 The tests use explicit UTC timestamps to avoid timezone-related inconsistencies.
+
+## Example Translation
+
+Each word can store an optional **Mongolian translation of its example sentence**, so you can see how the word is used in context and check your understanding.
+
+### How it works
+
+- When adding or editing a word, fill in the **"Mongolian translation of example (optional)"** field. For example:
+  - Example: `I like cats.`
+  - Translation: `Би мууранд дуртай.`
+- The translation appears under the example sentence in the **Vocabulary** list.
+- In **Study cards** and **Daily review**, it appears on the back of the card (after you flip it), below the example sentence.
+- The field is optional. Words without a translation display normally.
+
+### Data model
+
+A new `translation` field was added to each word:
+
+| Field         | Type   | Required | Limit      |
+| ------------- | ------ | -------- | ---------- |
+| `translation` | string | No       | 1000 chars |
+
+### API changes
+
+- `POST /api/words` accepts `translation` in the request body and saves it.
+- `PATCH /api/words/:id` accepts `translation` when editing a word.
+- `GET /api/words` returns `translation` with each word.
+
+```json
+POST /api/words
+{
+  "word": "cat",
+  "meaning": "муур",
+  "example": "I like cats.",
+  "translation": "Би мууранд дуртай."
+}
+```
+
+### Files changed
+
+- `app/page.tsx`: new form field, and display in the list and flashcards
+- `app/api/words/route.ts`: reads and stores `translation` on create
+- `app/api/words/[id]/route.ts`: reads and stores `translation` on edit
+
+### Notes
+
+- Words created before this feature was added have no `translation`. They still work, and the field is added the next time you edit and save the word.

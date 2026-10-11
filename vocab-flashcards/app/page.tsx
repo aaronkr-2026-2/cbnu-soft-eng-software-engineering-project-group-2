@@ -21,6 +21,7 @@ type Word = {
   word: string;
   meaning: string;
   example: string;
+  translation: string; // NEW: example sentence-ийн монгол орчуулга
   reviewCount: number;
   nextReviewAt: string;
 };
@@ -29,12 +30,14 @@ type Draft = {
   word: string;
   meaning: string;
   example: string;
+  translation: string; // NEW
 };
 
 const emptyDraft: Draft = {
   word: "",
   meaning: "",
   example: "",
+  translation: "",
 };
 
 type Tab = "words" | "study" | "daily";
@@ -45,13 +48,13 @@ export default function Home() {
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false); // FIX: давхар submit-аас сэргийлнэ
   const [search, setSearch] = useState("");
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Used after save / delete / review to refresh the list.
   const loadWords = useCallback(async () => {
     try {
       const response = await fetch("/api/words");
@@ -65,7 +68,6 @@ export default function Home() {
     }
   }, []);
 
-  // Initial load. setState is only called after an await, never synchronously.
   useEffect(() => {
     let cancelled = false;
 
@@ -105,8 +107,25 @@ export default function Home() {
   const studyWords = tab === "daily" ? dueWords : words;
   const current = studyWords[index];
 
+  function openNewForm() {
+    setDraft(emptyDraft);
+    setEditingId(null);
+    setError("");
+    setShowForm(true);
+  }
+
+  // FIX: форм хаахдаа draft, editingId, error-ыг цэвэрлэнэ
+  function closeForm() {
+    setShowForm(false);
+    setDraft(emptyDraft);
+    setEditingId(null);
+    setError("");
+  }
+
   async function saveWord(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (saving) return;
+    setSaving(true);
     setError("");
 
     try {
@@ -124,14 +143,12 @@ export default function Home() {
         throw new Error(result.error || "Could not save word.");
       }
 
-      setDraft(emptyDraft);
-      setEditingId(null);
-      setShowForm(false);
+      closeForm();
       await loadWords();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not save word."
-      );
+      setError(err instanceof Error ? err.message : "Could not save word.");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -139,9 +156,11 @@ export default function Home() {
     setDraft({
       word: item.word,
       meaning: item.meaning,
-      example: item.example,
+      example: item.example ?? "",
+      translation: item.translation ?? "",
     });
     setEditingId(item._id);
+    setError("");
     setShowForm(true);
   }
 
@@ -205,21 +224,13 @@ export default function Home() {
               <BookOpen size={22} />
             </div>
             <div>
-              <h1 className="text-xl font-semibold tracking-tight">
-                Vocab
-              </h1>
-              <p className="text-sm text-stone-500">
-                Your personal word space
-              </p>
+              <h1 className="text-xl font-semibold tracking-tight">Vocab</h1>
+              <p className="text-sm text-stone-500">Your personal word space</p>
             </div>
           </div>
 
           <button
-            onClick={() => {
-              setDraft(emptyDraft);
-              setEditingId(null);
-              setShowForm(true);
-            }}
+            onClick={openNewForm}
             className="flex items-center gap-2 rounded-xl bg-stone-900 px-4 py-3 text-sm font-medium text-white hover:bg-stone-700"
           >
             <Plus size={17} /> Add word
@@ -262,14 +273,20 @@ export default function Home() {
           ))}
         </nav>
 
-        {error && (
-          <p role="alert" className="mt-5 rounded-xl bg-red-50 p-3 text-sm text-red-700">
+        {/* FIX: форм нээлттэй үед алдааг форм дотор харуулна */}
+        {error && !showForm && (
+          <p
+            role="alert"
+            className="mt-5 rounded-xl bg-red-50 p-3 text-sm text-red-700"
+          >
             {error}
           </p>
         )}
 
         {loading ? (
-          <p className="py-16 text-center text-stone-500">Loading vocabulary…</p>
+          <p className="py-16 text-center text-stone-500">
+            Loading vocabulary…
+          </p>
         ) : tab === "words" ? (
           <section className="mt-7">
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -293,7 +310,9 @@ export default function Home() {
             <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
               {visibleWords.length === 0 ? (
                 <p className="p-10 text-center text-sm text-stone-500">
-                  {words.length ? "No matching words." : "No words yet. Add your first word to begin."}
+                  {words.length
+                    ? "No matching words."
+                    : "No words yet. Add your first word to begin."}
                 </p>
               ) : (
                 <div className="divide-y divide-stone-100">
@@ -304,10 +323,18 @@ export default function Home() {
                     >
                       <div className="min-w-0 flex-1">
                         <h3 className="font-medium">{item.word}</h3>
-                        <p className="mt-1 text-sm text-stone-600">{item.meaning}</p>
+                        <p className="mt-1 text-sm text-stone-600">
+                          {item.meaning}
+                        </p>
                         {item.example && (
                           <p className="mt-1 text-sm italic text-stone-400">
                             {item.example}
+                          </p>
+                        )}
+                        {/* NEW: орчуулга */}
+                        {item.translation && (
+                          <p className="mt-0.5 text-sm text-stone-500">
+                            {item.translation}
                           </p>
                         )}
                       </div>
@@ -315,7 +342,10 @@ export default function Home() {
                         <IconButton label="Edit" onClick={() => editWord(item)}>
                           <Pencil size={16} />
                         </IconButton>
-                        <IconButton label="Delete" onClick={() => deleteWord(item._id)}>
+                        <IconButton
+                          label="Delete"
+                          onClick={() => deleteWord(item._id)}
+                        >
                           <Trash2 size={16} />
                         </IconButton>
                       </div>
@@ -353,6 +383,12 @@ export default function Home() {
                   {flipped && current.example && (
                     <span className="mt-5 max-w-sm text-sm italic text-stone-500">
                       {current.example}
+                    </span>
+                  )}
+                  {/* NEW: орчуулга */}
+                  {flipped && current.translation && (
+                    <span className="mt-1 max-w-sm text-sm text-stone-600">
+                      {current.translation}
                     </span>
                   )}
                   <span className="mt-8 text-sm text-stone-400">
@@ -414,9 +450,13 @@ export default function Home() {
         )}
 
         {showForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+            onClick={closeForm}
+          >
             <form
               onSubmit={saveWord}
+              onClick={(e) => e.stopPropagation()}
               className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
             >
               <div className="mb-6 flex items-center justify-between">
@@ -425,7 +465,7 @@ export default function Home() {
                 </h2>
                 <button
                   type="button"
-                  onClick={() => setShowForm(false)}
+                  onClick={closeForm}
                   aria-label="Close form"
                   className="rounded-lg p-2 hover:bg-stone-100"
                 >
@@ -433,31 +473,54 @@ export default function Home() {
                 </button>
               </div>
 
+              {error && (
+                <p
+                  role="alert"
+                  className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700"
+                >
+                  {error}
+                </p>
+              )}
+
               <div className="space-y-4">
                 <Field
                   label="English word"
                   value={draft.word}
                   onChange={(value) => setDraft({ ...draft, word: value })}
+                  maxLength={100}
                   required
                 />
                 <Field
                   label="Mongolian meaning"
                   value={draft.meaning}
                   onChange={(value) => setDraft({ ...draft, meaning: value })}
+                  maxLength={500}
                   required
                 />
                 <Field
                   label="Example sentence (optional)"
                   value={draft.example}
                   onChange={(value) => setDraft({ ...draft, example: value })}
+                  maxLength={1000}
+                />
+                {/* NEW: орчуулгын талбар */}
+                <Field
+                  label="Mongolian translation of example (optional)"
+                  value={draft.translation}
+                  onChange={(value) =>
+                    setDraft({ ...draft, translation: value })
+                  }
+                  placeholder="Би мууранд дуртай."
+                  maxLength={1000}
                 />
               </div>
 
               <button
                 type="submit"
-                className="mt-6 w-full rounded-xl bg-stone-900 px-4 py-3 text-sm font-medium text-white hover:bg-stone-700"
+                disabled={saving}
+                className="mt-6 w-full rounded-xl bg-stone-900 px-4 py-3 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-60"
               >
-                {editingId ? "Save changes" : "Add word"}
+                {saving ? "Saving…" : editingId ? "Save changes" : "Add word"}
               </button>
             </form>
           </div>
@@ -502,15 +565,20 @@ function IconButton({
   );
 }
 
+// FIX: maxLength-ийг label-аар таах биш prop-оор дамжуулдаг болгосон
 function Field({
   label,
   value,
   onChange,
+  maxLength = 1000,
+  placeholder,
   required = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  maxLength?: number;
+  placeholder?: string;
   required?: boolean;
 }) {
   return (
@@ -522,7 +590,8 @@ function Field({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         required={required}
-        maxLength={label === "English word" ? 100 : label === "Mongolian meaning" ? 500 : 1000}
+        maxLength={maxLength}
+        placeholder={placeholder}
         className="w-full rounded-xl border border-stone-200 px-3.5 py-3 text-sm outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-100"
       />
     </label>
