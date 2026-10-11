@@ -245,3 +245,218 @@ POST /api/words
 ### Notes
 
 - Words created before this feature was added have no `translation`. They still work, and the field is added the next time you edit and save the word.
+
+# Vocab
+
+A personal vocabulary app for learning English words with Mongolian meanings. Users register and log in, study words as flashcards, and review the ones that are due. Admins manage the word list.
+
+## Features
+
+- **Accounts**: users register themselves; admins and regular users log in through the same screen
+- **Role-based access**: permissions are checked on the server for every request
+- **Vocabulary list**: browse and search words (admins can also add, edit, and delete)
+- **Example sentences**: each word can have an example sentence and its Mongolian translation
+- **Study cards**: flip through flashcards of the whole collection
+- **Daily review**: review due words and mark each as "I know it" or "Review tomorrow"
+- **Per-user progress**: every user has their own review schedule and stats
+
+## Roles and Permissions
+
+| Role  | View words | Study / Daily review | Add / Edit / Delete words |
+| ----- | ---------- | -------------------- | ------------------------- |
+| user  | Yes        | Yes                  | No                        |
+| admin | Yes        | Yes                  | Yes                       |
+
+- Anyone who registers becomes a `user`.
+- Admins can only be created with the script in `scripts/create-admin.mjs`. There is no way to become admin through the UI or API.
+- Permissions are defined in `lib/permissions.ts` and enforced in the API routes. Hiding buttons in the UI is only a convenience, not the security boundary.
+
+## Tech Stack
+
+- [Next.js](https://nextjs.org/) (App Router) with TypeScript
+- [Tailwind CSS](https://tailwindcss.com/)
+- [MongoDB](https://www.mongodb.com/) (native `mongodb` driver)
+- [lucide-react](https://lucide.dev/) for icons
+- Node.js `crypto` for password hashing (scrypt) and session signing (HMAC-SHA256)
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 20.6 or newer (needed for `--env-file`)
+- A MongoDB database (local or [MongoDB Atlas](https://www.mongodb.com/atlas))
+
+### Installation
+
+```bash
+git clone aaronkr-2026-2/cbnu-soft-eng-software-engineering-project-group-2
+cd vocab-flashcards
+npm install
+```
+
+### Environment Variables
+
+Create a `.env.local` file in the project root:
+
+```env
+MONGODB_URI=your-mongodb-connection-string
+MONGODB_DB=vocab_flashcards
+AUTH_SECRET=your-random-64-character-secret
+```
+
+| Variable      | Required | Description                                 |
+| ------------- | -------- | ------------------------------------------- |
+| `MONGODB_URI` | Yes      | MongoDB connection string                   |
+| `MONGODB_DB`  | No       | Database name (default: `vocab_flashcards`) |
+| `AUTH_SECRET` | Yes      | Secret used to sign session cookies         |
+
+Generate `AUTH_SECRET` randomly. Do not invent it by hand:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Never commit `.env.local`. Changing `AUTH_SECRET` logs out all users.
+
+### Create the first admin
+
+```bash
+node --env-file=.env.local scripts/create-admin.mjs <username> "<password>"
+```
+
+- Username: 3-30 characters, lowercase letters, numbers, `_` `.` `-`
+- Password: at least 8 characters
+- Running it again with the same username resets that admin's password
+
+### Run the app
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000), log in as the admin, and add some words. Other people can register from the login screen.
+
+## How Review Works
+
+Each user has their own progress record per word, stored in the `progress` collection. A word is due when its `nextReviewAt` is today or earlier. Words a user has never reviewed are due immediately.
+
+| Action          | Next review |
+| --------------- | ----------- |
+| I know it       | in 3 days   |
+| Review tomorrow | in 1 day    |
+
+The scheduling logic lives in `lib/review.ts`.
+
+## Data Model
+
+**`words`**: shared by everyone, managed by admins
+
+```ts
+{
+  _id: ObjectId;
+  word: string; // English word (max 100 chars)
+  meaning: string; // Mongolian meaning (max 500 chars)
+  example: string; // Example sentence (max 1000 chars, optional)
+  translation: string; // Mongolian translation of the example (max 1000 chars, optional)
+  createdAt: Date;
+}
+```
+
+**`users`**
+
+```ts
+{
+  _id: ObjectId;
+  username: string; // unique, lowercase
+  passwordHash: string; // "salt:hash" (scrypt)
+  role: "admin" | "user";
+  createdAt: Date;
+}
+```
+
+**`progress`**: one document per user and word
+
+```ts
+{
+  userId: string;
+  wordId: ObjectId;
+  nextReviewAt: Date;
+  lastReviewedAt: Date;
+  reviewCount: number;
+}
+```
+
+## API Reference
+
+All word endpoints require a logged-in user.
+
+| Method | Endpoint             | Access            | Description                                                           |
+| ------ | -------------------- | ----------------- | --------------------------------------------------------------------- |
+| POST   | `/api/auth/register` | Public            | Create a `user` account and start a session                           |
+| POST   | `/api/auth/login`    | Public            | Log in                                                                |
+| POST   | `/api/auth/logout`   | Public            | Clear the session cookie                                              |
+| GET    | `/api/auth/me`       | Public            | Current user, or `null`                                               |
+| GET    | `/api/words`         | Logged in         | List words with the caller's own progress (`?due=true` for due words) |
+| POST   | `/api/words`         | Admin             | Create a word                                                         |
+| PATCH  | `/api/words/:id`     | Logged in / Admin | Submit a review (any user) or edit a word (admin only)                |
+| DELETE | `/api/words/:id`     | Admin             | Delete a word and its progress records                                |
+
+Submitting a review:
+
+```json
+PATCH /api/words/:id
+{ "review": "know" }    // or "again"
+```
+
+Creating a word:
+
+```json
+POST /api/words
+{
+  "word": "cat",
+  "meaning": "муур",
+  "example": "I like cats.",
+  "translation": "Би мууранд дуртай."
+}
+```
+
+Unauthenticated requests return `401`. Requests without the required role return `403`.
+
+## Security Notes
+
+- Passwords are hashed with scrypt and a per-user random salt. Plain passwords are never stored.
+- Sessions are signed (HMAC-SHA256) tokens in an `httpOnly`, `sameSite=lax` cookie (`secure` in production), valid for 7 days.
+- The user's role is read from the database on every request, so role changes take effect immediately.
+- Login and registration have **no rate limiting** yet. Add it before exposing the app publicly.
+
+## Project Structure
+
+```
+app/
+  page.tsx                    # UI: login, vocabulary, study cards, daily review
+  api/
+    auth/
+      register/route.ts
+      login/route.ts
+      logout/route.ts
+      me/route.ts
+    words/
+      route.ts                # GET, POST
+      [id]/route.ts           # PATCH (review / edit), DELETE
+lib/
+  mongodb.ts                  # MongoDB client
+  db.ts                       # getDb() helper
+  auth.ts                     # password hashing, session tokens, getCurrentUser()
+  permissions.ts              # roles and can() helper
+  review.ts                   # review scheduling logic
+scripts/
+  create-admin.mjs            # create or update an admin account
+```
+
+## Notes
+
+- Words created before the `translation` field existed have no translation. Editing and saving such a word adds it.
+- Progress that older versions stored directly on words is no longer used. Each user starts fresh.
+- Review dates use the server's time zone.
+
+## License

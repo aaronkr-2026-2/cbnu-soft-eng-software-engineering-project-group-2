@@ -15,13 +15,14 @@ import {
   Check,
   X,
 } from "lucide-react";
+import { can, type SessionUser } from "@/lib/permissions";
 
 type Word = {
   _id: string;
   word: string;
   meaning: string;
   example: string;
-  translation: string; // NEW: example sentence-ийн монгол орчуулга
+  translation: string;
   reviewCount: number;
   nextReviewAt: string;
 };
@@ -30,7 +31,7 @@ type Draft = {
   word: string;
   meaning: string;
   example: string;
-  translation: string; // NEW
+  translation: string;
 };
 
 const emptyDraft: Draft = {
@@ -43,21 +44,33 @@ const emptyDraft: Draft = {
 type Tab = "words" | "study" | "daily";
 
 export default function Home() {
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [words, setWords] = useState<Word[]>([]);
   const [tab, setTab] = useState<Tab>("words");
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [saving, setSaving] = useState(false); // FIX: давхар submit-аас сэргийлнэ
+  const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Session дууссан (401) үед нэвтрэх дэлгэц рүү буцаана
+  const handleUnauthorized = useCallback(() => {
+    setUser(null);
+    setWords([]);
+    setShowForm(false);
+  }, []);
+
   const loadWords = useCallback(async () => {
     try {
       const response = await fetch("/api/words");
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       if (!response.ok) throw new Error("Could not load words.");
 
       const data: Word[] = await response.json();
@@ -66,18 +79,26 @@ export default function Home() {
     } catch {
       setError("Could not connect to the database. Check your setup.");
     }
-  }, []);
+  }, [handleUnauthorized]);
 
+  // Анхны ачаалалт: хэрэглэгч нэвтэрсэн эсэхийг шалгаад үгсийг татна
   useEffect(() => {
     let cancelled = false;
 
     async function init() {
       try {
-        const response = await fetch("/api/words");
-        if (!response.ok) throw new Error("Could not load words.");
+        const me = await fetch("/api/auth/me");
+        const { user: currentUser } = await me.json();
+        if (cancelled) return;
+        setUser(currentUser);
 
-        const data: Word[] = await response.json();
-        if (!cancelled) setWords(data);
+        if (currentUser) {
+          const response = await fetch("/api/words");
+          if (!response.ok) throw new Error("Could not load words.");
+
+          const data: Word[] = await response.json();
+          if (!cancelled) setWords(data);
+        }
       } catch {
         if (!cancelled) {
           setError("Could not connect to the database. Check your setup.");
@@ -107,6 +128,26 @@ export default function Home() {
   const studyWords = tab === "daily" ? dueWords : words;
   const current = studyWords[index];
 
+  async function handleAuth(nextUser: SessionUser) {
+    setUser(nextUser);
+    setTab("words");
+    setIndex(0);
+    setFlipped(false);
+    setError("");
+    await loadWords();
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setUser(null);
+    setWords([]);
+    setTab("words");
+    setIndex(0);
+    setFlipped(false);
+    setShowForm(false);
+    setError("");
+  }
+
   function openNewForm() {
     setDraft(emptyDraft);
     setEditingId(null);
@@ -114,7 +155,6 @@ export default function Home() {
     setShowForm(true);
   }
 
-  // FIX: форм хаахдаа draft, editingId, error-ыг цэвэрлэнэ
   function closeForm() {
     setShowForm(false);
     setDraft(emptyDraft);
@@ -139,6 +179,10 @@ export default function Home() {
       );
 
       const result = await response.json();
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       if (!response.ok) {
         throw new Error(result.error || "Could not save word.");
       }
@@ -171,6 +215,10 @@ export default function Home() {
       const response = await fetch(`/api/words/${id}`, {
         method: "DELETE",
       });
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       if (!response.ok) throw new Error("Could not delete word.");
 
       setIndex(0);
@@ -191,6 +239,10 @@ export default function Home() {
         body: JSON.stringify({ review }),
       });
 
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       if (!response.ok) throw new Error("Review failed.");
 
       setIndex(0);
@@ -215,6 +267,21 @@ export default function Home() {
     { id: "daily" as const, label: "Daily review", icon: CalendarCheck },
   ];
 
+  if (loading) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#fafaf9] text-stone-500">
+        Loading…
+      </main>
+    );
+  }
+
+  if (!user) {
+    return <AuthScreen onAuth={handleAuth} />;
+  }
+
+  const canEdit = can(user, "word:edit");
+  const canDelete = can(user, "word:delete");
+
   return (
     <main className="min-h-screen bg-[#fafaf9] text-stone-900">
       <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8">
@@ -229,12 +296,30 @@ export default function Home() {
             </div>
           </div>
 
-          <button
-            onClick={openNewForm}
-            className="flex items-center gap-2 rounded-xl bg-stone-900 px-4 py-3 text-sm font-medium text-white hover:bg-stone-700"
-          >
-            <Plus size={17} /> Add word
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="hidden text-sm text-stone-500 sm:block">
+              {user.username}
+              {user.role === "admin" && (
+                <span className="ml-2 rounded-full bg-stone-900 px-2 py-0.5 text-xs text-white">
+                  admin
+                </span>
+              )}
+            </span>
+            {can(user, "word:create") && (
+              <button
+                onClick={openNewForm}
+                className="flex items-center gap-2 rounded-xl bg-stone-900 px-4 py-3 text-sm font-medium text-white hover:bg-stone-700"
+              >
+                <Plus size={17} /> Add word
+              </button>
+            )}
+            <button
+              onClick={logout}
+              className="rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm hover:bg-stone-50"
+            >
+              Logout
+            </button>
+          </div>
         </header>
 
         <section className="mt-10 grid gap-4 sm:grid-cols-3">
@@ -273,7 +358,6 @@ export default function Home() {
           ))}
         </nav>
 
-        {/* FIX: форм нээлттэй үед алдааг форм дотор харуулна */}
         {error && !showForm && (
           <p
             role="alert"
@@ -283,17 +367,15 @@ export default function Home() {
           </p>
         )}
 
-        {loading ? (
-          <p className="py-16 text-center text-stone-500">
-            Loading vocabulary…
-          </p>
-        ) : tab === "words" ? (
+        {tab === "words" ? (
           <section className="mt-7">
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">My vocabulary</h2>
                 <p className="mt-1 text-sm text-stone-500">
-                  Build your word collection one word at a time.
+                  {can(user, "word:create")
+                    ? "Build your word collection one word at a time."
+                    : "Browse the words and practice them in Study cards."}
                 </p>
               </div>
               <div className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2.5">
@@ -312,7 +394,9 @@ export default function Home() {
                 <p className="p-10 text-center text-sm text-stone-500">
                   {words.length
                     ? "No matching words."
-                    : "No words yet. Add your first word to begin."}
+                    : can(user, "word:create")
+                      ? "No words yet. Add your first word to begin."
+                      : "No words yet. Please check back later."}
                 </p>
               ) : (
                 <div className="divide-y divide-stone-100">
@@ -331,24 +415,32 @@ export default function Home() {
                             {item.example}
                           </p>
                         )}
-                        {/* NEW: орчуулга */}
                         {item.translation && (
                           <p className="mt-0.5 text-sm text-stone-500">
                             {item.translation}
                           </p>
                         )}
                       </div>
-                      <div className="flex gap-1">
-                        <IconButton label="Edit" onClick={() => editWord(item)}>
-                          <Pencil size={16} />
-                        </IconButton>
-                        <IconButton
-                          label="Delete"
-                          onClick={() => deleteWord(item._id)}
-                        >
-                          <Trash2 size={16} />
-                        </IconButton>
-                      </div>
+                      {(canEdit || canDelete) && (
+                        <div className="flex gap-1">
+                          {canEdit && (
+                            <IconButton
+                              label="Edit"
+                              onClick={() => editWord(item)}
+                            >
+                              <Pencil size={16} />
+                            </IconButton>
+                          )}
+                          {canDelete && (
+                            <IconButton
+                              label="Delete"
+                              onClick={() => deleteWord(item._id)}
+                            >
+                              <Trash2 size={16} />
+                            </IconButton>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -385,7 +477,6 @@ export default function Home() {
                       {current.example}
                     </span>
                   )}
-                  {/* NEW: орчуулга */}
                   {flipped && current.translation && (
                     <span className="mt-1 max-w-sm text-sm text-stone-600">
                       {current.translation}
@@ -442,7 +533,9 @@ export default function Home() {
                 <p className="mt-2 text-sm text-stone-500">
                   {tab === "daily"
                     ? "Come back when your next words are due."
-                    : "Add some vocabulary to start studying."}
+                    : can(user, "word:create")
+                      ? "Add some vocabulary to start studying."
+                      : "Words will appear here once an admin adds them."}
                 </p>
               </div>
             )}
@@ -503,7 +596,6 @@ export default function Home() {
                   onChange={(value) => setDraft({ ...draft, example: value })}
                   maxLength={1000}
                 />
-                {/* NEW: орчуулгын талбар */}
                 <Field
                   label="Mongolian translation of example (optional)"
                   value={draft.translation}
@@ -530,6 +622,117 @@ export default function Home() {
           Vocab · Built for daily learning
         </footer>
       </div>
+    </main>
+  );
+}
+
+function AuthScreen({ onAuth }: { onAuth: (user: SessionUser) => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+
+    try {
+      const response = await fetch(`/api/auth/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Something went wrong.");
+      }
+      onAuth(result.user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-stone-200 px-3.5 py-3 text-sm outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-100";
+
+  return (
+    <main className="grid min-h-screen place-items-center bg-[#fafaf9] p-4 text-stone-900">
+      <form
+        onSubmit={submit}
+        className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-6 shadow-sm"
+      >
+        <div className="mb-6 flex items-center gap-3">
+          <div className="rounded-xl bg-stone-900 p-2.5 text-white">
+            <BookOpen size={22} />
+          </div>
+          <div>
+            <h1 className="text-lg font-semibold">Vocab</h1>
+            <p className="text-sm text-stone-500">
+              {mode === "login" ? "Log in to continue" : "Create your account"}
+            </p>
+          </div>
+        </div>
+
+        {error && (
+          <p
+            role="alert"
+            className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700"
+          >
+            {error}
+          </p>
+        )}
+
+        <div className="space-y-4">
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Username"
+            autoComplete="username"
+            required
+            className={inputClass}
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={
+              mode === "register" ? "Password (8+ characters)" : "Password"
+            }
+            autoComplete={
+              mode === "login" ? "current-password" : "new-password"
+            }
+            required
+            minLength={mode === "register" ? 8 : undefined}
+            className={inputClass}
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={busy}
+          className="mt-6 w-full rounded-xl bg-stone-900 px-4 py-3 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-60"
+        >
+          {busy ? "Please wait…" : mode === "login" ? "Log in" : "Register"}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setMode(mode === "login" ? "register" : "login");
+            setError("");
+          }}
+          className="mt-4 w-full text-center text-sm text-stone-500 hover:text-stone-900"
+        >
+          {mode === "login"
+            ? "No account? Register"
+            : "Already have an account? Log in"}
+        </button>
+      </form>
     </main>
   );
 }
@@ -565,7 +768,6 @@ function IconButton({
   );
 }
 
-// FIX: maxLength-ийг label-аар таах биш prop-оор дамжуулдаг болгосон
 function Field({
   label,
   value,

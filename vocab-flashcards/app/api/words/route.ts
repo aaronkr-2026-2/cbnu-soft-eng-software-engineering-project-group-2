@@ -1,35 +1,56 @@
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
-import clientPromise from "@/lib/mongodb";
-
-async function getCollection() {
-  const client = await clientPromise;
-  const db = client.db(process.env.MONGODB_DB || "vocab_flashcards");
-
-  return db.collection("words");
-}
+import { getDb } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 
 // GET /api/words
 // GET /api/words?due=true
+// Үг бүрт ЭНЭ хэрэглэгчийн прогрессийг нэгтгэж буцаана
 export async function GET(request: Request) {
   try {
-    const collection = await getCollection();
+    const user = await getCurrentUser();
+    if (!user || !can(user, "word:read")) {
+      return NextResponse.json({ error: "Please log in." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const dueOnly = searchParams.get("due") === "true";
 
-    const filter = dueOnly ? { nextReviewAt: { $lte: new Date() } } : {};
-
-    const words = await collection
-      .find(filter)
+    const db = await getDb();
+    const words = await db
+      .collection("words")
+      .find({})
       .sort({ createdAt: -1 })
       .toArray();
+    const progressList = await db
+      .collection("progress")
+      .find({ userId: user.id })
+      .toArray();
 
-    return NextResponse.json(
-      words.map((item) => ({
-        ...item,
-        _id: (item._id as ObjectId).toString(),
-      }))
+    const progressByWord = new Map(
+      progressList.map((p) => [String(p.wordId), p])
     );
+
+    const now = new Date();
+    let result = words.map((item) => {
+      const id = (item._id as ObjectId).toString();
+      const p = progressByWord.get(id);
+      return {
+        ...item,
+        _id: id,
+        // прогресс байхгүй бол шууд давтахад бэлэн
+        nextReviewAt: p?.nextReviewAt ?? now,
+        lastReviewedAt: p?.lastReviewedAt ?? null,
+        reviewCount: p?.reviewCount ?? 0,
+      };
+    });
+
+    if (dueOnly) {
+      result = result.filter((w) => new Date(w.nextReviewAt) <= now);
+    }
+
+    return NextResponse.json(result);
   } catch {
     return NextResponse.json(
       { error: "Could not load vocabulary." },
@@ -38,15 +59,22 @@ export async function GET(request: Request) {
   }
 }
 
-// POST /api/words
+// POST /api/words (зөвхөн admin)
 export async function POST(request: Request) {
   try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: "Please log in." }, { status: 401 });
+    }
+    if (!can(user, "word:create")) {
+      return NextResponse.json({ error: "Admin only." }, { status: 403 });
+    }
+
     const body = await request.json();
 
     const word = typeof body.word === "string" ? body.word.trim() : "";
     const meaning = typeof body.meaning === "string" ? body.meaning.trim() : "";
     const example = typeof body.example === "string" ? body.example.trim() : "";
-    // NEW: example-ийн монгол орчуулга
     const translation =
       typeof body.translation === "string" ? body.translation.trim() : "";
 
@@ -70,17 +98,15 @@ export async function POST(request: Request) {
     }
 
     const now = new Date();
-    const collection = await getCollection();
+    const db = await getDb();
 
-    const result = await collection.insertOne({
+    // nextReviewAt, reviewCount зэрэг прогресс одоо "progress" collection-д хадгалагдана
+    const result = await db.collection("words").insertOne({
       word,
       meaning,
       example,
-      translation, // NEW
+      translation,
       createdAt: now,
-      nextReviewAt: now,
-      lastReviewedAt: null,
-      reviewCount: 0,
     });
 
     return NextResponse.json(
@@ -89,7 +115,7 @@ export async function POST(request: Request) {
         word,
         meaning,
         example,
-        translation, // NEW
+        translation,
         createdAt: now,
         nextReviewAt: now,
         lastReviewedAt: null,

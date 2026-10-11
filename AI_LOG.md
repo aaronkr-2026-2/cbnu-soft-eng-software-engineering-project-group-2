@@ -190,7 +190,71 @@ This file records how AI tools were used during the development of the Vocab Fla
 - AI output is not always a perfect fit, so every suggestion was reviewed, tested, and understood before being committed.
 - AI did not make design or architecture decisions for the project. Those were made by the team.
 
-```
+## Tool
+
+- **Assistant:** Claude (Anthropic), used through the chat interface
+- **Period:** October 2026
+- **How it was used:** I pasted my existing code, described what I wanted, and the assistant returned updated files. I copied the code into the project myself. The assistant had no direct access to the repository, database, or environment.
+
+## Summary of AI-assisted work
+
+| #   | Task                                                                    | Files affected                                                                                                                    |
+| --- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Added an optional Mongolian translation of the example sentence         | `app/page.tsx`, `app/api/words/route.ts`, `app/api/words/[id]/route.ts`                                                           |
+| 2   | Reviewed and fixed UI and API issues (see "Issues found")               | `app/page.tsx`, `app/api/words/[id]/route.ts`                                                                                     |
+| 3   | Wrote the first README                                                  | `README.md`                                                                                                                       |
+| 4   | Added admin-only editing with a single password (first, simpler design) | later replaced by #5                                                                                                              |
+| 5   | Replaced it with registration, login, roles, and per-user progress      | `lib/auth.ts`, `lib/db.ts`, `lib/permissions.ts`, `app/api/auth/*`, `app/api/words/*`, `app/page.tsx`, `scripts/create-admin.mjs` |
+| 6   | Reviewed `lib/mongodb.ts` and fixed import mistakes in `lib/auth.ts`    | `lib/auth.ts`, `lib/db.ts`                                                                                                        |
+| 7   | Rewrote the README and this log to match the final design               | `README.md`, `AI_LOG.md`                                                                                                          |
+
+## Key decisions
+
+1. **Authorization is enforced in the API, not the UI.** Hiding buttons is cosmetic. Every protected route calls `getCurrentUser()` and `can(user, permission)`.
+2. **Admins cannot be created through registration.** Registration always creates `role: "user"`. Admins are created only by a local script, so nobody can claim admin by choosing a username or sending extra fields.
+3. **Per-user progress in a separate `progress` collection.** Originally `nextReviewAt` and `reviewCount` were stored on each word, so one user's review changed the schedule for everyone. Moving them to `{ userId, wordId }` documents fixes this.
+4. **No auth library.** Sessions use an HMAC-signed cookie and `scrypt` from Node's built-in `crypto`, to keep the project dependency-free. The trade-off is that I maintain the auth code myself.
+5. **Role is read from the database on each request**, not stored in the cookie, so role changes apply immediately.
+6. **`AUTH_SECRET` is generated randomly**, not chosen by hand, because anyone who knows it can forge a session for any user.
+
+## Issues found during AI review
+
+- **Date bug in review scheduling.** The route called `getNextReviewDate()` and then overwrote the result with `nextReviewAt.setDate(now.getDate() + n)`. `getDate()` returns the day of the month, so the date could be wrong near month ends. The duplicate line was removed. `lib/review.ts` was confirmed correct.
+- **Stale form state.** Closing the form with X kept the previous edit state. A shared `closeForm()` now resets the draft, editing ID, and error.
+- **Errors hidden behind the modal.** Errors are now shown inside the form while it is open.
+- **Double submit.** Added a `saving` flag.
+- **Fragile `maxLength` logic.** `Field` guessed the limit from its label text. It is now a prop.
+- **Wrong import.** `lib/auth.ts` imported `getDb` as a default export from `@/lib/mongodb`, which actually default-exports `clientPromise`. Fixed by creating `lib/db.ts` with a named `getDb` export.
+- **Missing environment check.** Added a startup error when `AUTH_SECRET` is missing, because otherwise sessions silently fail.
+
+## Mistakes the assistant made
+
+- An early suggestion included a Mongoose schema (`models/Word.ts`) although the project uses the native MongoDB driver. It was flagged as unnecessary and not used.
+- The README initially guessed the environment variable name `MONGODB_URI`. It was later confirmed against `lib/mongodb.ts`.
+
+## Human review and testing
+
+- [ ] Registered a new user and confirmed the role is `user`
+- [ ] Created an admin with `scripts/create-admin.mjs` and logged in
+- [ ] Confirmed a regular user gets `403` from `POST /api/words`, `PATCH /api/words/:id` (edit), and `DELETE /api/words/:id`
+- [ ] Confirmed two users have independent review progress
+- [ ] Confirmed deleting a word removes its `progress` documents
+- [ ] Confirmed logging out and an expired session return to the login screen
+- [ ] Confirmed `.env.local` is in `.gitignore`
+
+## Known limitations and follow-ups
+
+- No rate limiting or lockout on login and registration
+- No password reset flow (admins can be reset by re-running the script; regular users cannot)
+- No CSRF token. The cookie uses `sameSite=lax`, which gives basic protection
+- Existing words store legacy `nextReviewAt` / `reviewCount` fields that are now ignored
+- No automated tests
+- Review dates depend on the server's time zone
+
+## Notes on responsible use
+
+All AI-generated code was read and adapted by me before use. Secrets (`AUTH_SECRET`, database credentials, admin password) were never shared with the assistant.
+
 ## [Milestone name] — [Date]
 
 **Tool(s) used:**
@@ -200,4 +264,7 @@ This file records how AI tools were used during the development of the Vocab Fla
 **Something the AI got wrong that I had to catch:**
 
 ---
+
+```
+
 ```
