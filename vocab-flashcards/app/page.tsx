@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
@@ -52,26 +51,46 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Used after save / delete / review to refresh the list.
   const loadWords = useCallback(async () => {
-    setLoading(true);
-    setError("");
-
     try {
       const response = await fetch("/api/words");
       if (!response.ok) throw new Error("Could not load words.");
 
       const data: Word[] = await response.json();
       setWords(data);
+      setError("");
     } catch {
       setError("Could not connect to the database. Check your setup.");
-    } finally {
-      setLoading(false);
     }
   }, []);
 
+  // Initial load. setState is only called after an await, never synchronously.
   useEffect(() => {
-    void loadWords();
-  }, [loadWords]);
+    let cancelled = false;
+
+    async function init() {
+      try {
+        const response = await fetch("/api/words");
+        if (!response.ok) throw new Error("Could not load words.");
+
+        const data: Word[] = await response.json();
+        if (!cancelled) setWords(data);
+      } catch {
+        if (!cancelled) {
+          setError("Could not connect to the database. Check your setup.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void init();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const dueWords = words.filter(
     (item) => new Date(item.nextReviewAt) <= new Date()
