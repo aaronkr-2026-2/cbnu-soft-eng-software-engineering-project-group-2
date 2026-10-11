@@ -1,14 +1,9 @@
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
-import clientPromise from "@/lib/mongodb";
+import { getDb } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import { getNextReviewDate } from "@/lib/review";
-
-async function getCollection() {
-  const client = await clientPromise;
-  return client
-    .db(process.env.MONGODB_DB || "vocab_flashcards")
-    .collection("words");
-}
 
 type Context = {
   params: Promise<{ id: string }>;
@@ -16,6 +11,11 @@ type Context = {
 
 export async function PATCH(request: Request, context: Context) {
   try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: "Please log in." }, { status: 401 });
+    }
+
     const { id } = await context.params;
 
     if (!ObjectId.isValid(id)) {
@@ -23,38 +23,43 @@ export async function PATCH(request: Request, context: Context) {
     }
 
     const body = await request.json();
-    const collection = await getCollection();
+    const db = await getDb();
+    const words = db.collection("words");
     const _id = new ObjectId(id);
 
-    // Review action: "know" or "again"
+    // Review action: "know" or "again" (нэвтэрсэн бүх хэрэглэгч, өөрийн прогресс дээр)
     if (body.review === "know" || body.review === "again") {
-      const now = new Date();
-      // FIX: огнооны тооцоог зөвхөн getNextReviewDate хийнэ
-      const nextReviewAt = getNextReviewDate(body.review, now);
+      if (!can(user, "review")) {
+        return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+      }
 
-      const result = await collection.updateOne(
-        { _id },
-        {
-          $set: {
-            lastReviewedAt: now,
-            nextReviewAt,
-          },
-          $inc: { reviewCount: 1 },
-        }
-      );
-
-      if (!result.matchedCount) {
+      if (!(await words.countDocuments({ _id }))) {
         return NextResponse.json({ error: "Word not found." }, { status: 404 });
       }
+
+      const now = new Date();
+      const nextReviewAt = getNextReviewDate(body.review, now);
+
+      await db.collection("progress").updateOne(
+        { userId: user.id, wordId: _id },
+        {
+          $set: { lastReviewedAt: now, nextReviewAt },
+          $inc: { reviewCount: 1 },
+        },
+        { upsert: true }
+      );
 
       return NextResponse.json({ success: true, nextReviewAt });
     }
 
-    // Edit vocabulary
+    // Edit vocabulary (зөвхөн admin)
+    if (!can(user, "word:edit")) {
+      return NextResponse.json({ error: "Admin only." }, { status: 403 });
+    }
+
     const word = typeof body.word === "string" ? body.word.trim() : "";
     const meaning = typeof body.meaning === "string" ? body.meaning.trim() : "";
     const example = typeof body.example === "string" ? body.example.trim() : "";
-    // NEW: example-ийн монгол орчуулга
     const translation =
       typeof body.translation === "string" ? body.translation.trim() : "";
 
@@ -77,7 +82,7 @@ export async function PATCH(request: Request, context: Context) {
       );
     }
 
-    const result = await collection.updateOne(
+    const result = await words.updateOne(
       { _id },
       { $set: { word, meaning, example, translation } }
     );
@@ -97,18 +102,30 @@ export async function PATCH(request: Request, context: Context) {
 
 export async function DELETE(_request: Request, context: Context) {
   try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: "Please log in." }, { status: 401 });
+    }
+    if (!can(user, "word:delete")) {
+      return NextResponse.json({ error: "Admin only." }, { status: 403 });
+    }
+
     const { id } = await context.params;
 
     if (!ObjectId.isValid(id)) {
       return NextResponse.json({ error: "Invalid word ID." }, { status: 400 });
     }
 
-    const collection = await getCollection();
-    const result = await collection.deleteOne({ _id: new ObjectId(id) });
+    const db = await getDb();
+    const _id = new ObjectId(id);
+    const result = await db.collection("words").deleteOne({ _id });
 
     if (!result.deletedCount) {
       return NextResponse.json({ error: "Word not found." }, { status: 404 });
     }
+
+    // Тухайн үгийн бүх хэрэглэгчийн прогрессийг цэвэрлэнэ
+    await db.collection("progress").deleteMany({ wordId: _id });
 
     return NextResponse.json({ success: true });
   } catch {
