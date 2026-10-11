@@ -145,6 +145,52 @@ If AI is used for additional work, future entries should record:
 - Errors or limitations discovered.
 - How the final result was verified.
 
+# AI Usage Log
+
+This file records how AI tools were used during the development of the Vocab Flashcards project.
+
+## Summary
+
+| #   | Date       | Tool   | Area                   | Purpose                                   | Result                          |
+| --- | ---------- | ------ | ---------------------- | ----------------------------------------- | ------------------------------- |
+| 1   | 2026-10-11 | Claude | `app/page.tsx` (React) | Fix ESLint error in the initial data load | Accepted with small adaptations |
+
+## Entry 1: Fix `react-hooks/set-state-in-effect` error
+
+**Tool:** Claude (Anthropic)
+
+**Task:** ESLint reported this error in `app/page.tsx`:
+
+> Calling setState synchronously within an effect can trigger cascading renders (`react-hooks/set-state-in-effect`)
+
+**Prompt (summary):** Pasted `page.tsx` and the ESLint message, and asked for a fix.
+
+**Cause identified by AI:** The `useEffect` called `loadWords()`, and `loadWords()` began with `setLoading(true)` and `setError("")`. These ran synchronously inside the effect body.
+
+**AI suggestion:**
+
+- Remove `setLoading(true)` from `loadWords`. The `loading` state already starts as `true`, so it is not needed on first load.
+- Move the initial fetch into an `init()` function inside the effect, so state is only updated after `await`.
+- Add a `cancelled` flag and cleanup function to avoid updating state after the component unmounts.
+- Keep `loadWords` for refreshing the list after save, delete, and review actions.
+
+**What we did:** Replaced the `loadWords` function and the `useEffect` in `page.tsx` with the suggested versions. No other part of the file was changed. We ran `npm run lint` to confirm the error was gone and tested adding, editing, deleting, and reviewing words manually.
+
+**Verification:** Checked by running the linter and testing the app in the browser. We read the code and confirmed we understand why the change works.
+
+## Entry 2: Documentation drafts
+
+**Tool:** Claude (Anthropic)
+
+**What we did:** AI produced the first drafts based on the source code. The team checked the content against the real project (setup steps, environment variable name, API routes, project structure) and corrected anything that did not match.
+
+## Reflection
+
+- AI was most useful for explaining the lint rule and proposing a clean pattern for loading data in an effect.
+- AI output is not always a perfect fit, so every suggestion was reviewed, tested, and understood before being committed.
+- AI did not make design or architecture decisions for the project. Those were made by the team.
+
+```
 ## [Milestone name] — [Date]
 
 **Tool(s) used:**
@@ -154,3 +200,4 @@ If AI is used for additional work, future entries should record:
 **Something the AI got wrong that I had to catch:**
 
 ---
+```
